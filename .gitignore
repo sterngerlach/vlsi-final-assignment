@@ -1,0 +1,17 @@
+
+# .gitignore
+
+*.dsn
+*.history
+*.log
+*.swp
+*.trn
+*.vcd
+
+.simvision/
+xcelium.d/
+
+asm.pl
+mipse/
+tinymips/
+
