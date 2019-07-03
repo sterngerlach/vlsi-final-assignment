@@ -54,18 +54,20 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
 
     wire [WIDTH-1:0] pcplus4_f;
     wire [WIDTH-1:0] pcnext;
+    wire             stall_f;
+    wire             stall_d;
 
     wire [WIDTH-1:0] instr_d;
     wire [WIDTH-1:0] pcplus4_d;
     
     assign pcplus4_f = pc + 4;
 
-    mux2  #(WIDTH) pc_mux(pcplus4_f, pcbranch_m, pcsrc_m, pcnext);
-    flopr #(WIDTH) pc_flop(clk, rst, pcnext, pc);
+    mux2    #(WIDTH) pc_mux(pcplus4_f, pcbranch_m, pcsrc_m, pcnext);
+    flopenr #(WIDTH) pc_flop(clk, rst, !stall_f, pcnext, pc);
 
     /* Transfer to D stage */
-    flopr #(WIDTH) instr_d_flop(clk, rst, instr, instr_d);
-    flopr #(WIDTH) pcplus4_d_flop(clk, rst, pcplus4_f, pcplus4_d);
+    flopenr #(WIDTH) instr_d_flop(clk, rst, !stall_d, instr, instr_d);
+    flopenr #(WIDTH) pcplus4_d_flop(clk, rst, !stall_d, pcplus4_f, pcplus4_d);
 
     /*
      * D stage: Instruction Decode stage
@@ -104,15 +106,19 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire [REGBITS-1:0] rd_e;
     wire [WIDTH-1:0]   signimm_e;
     wire [WIDTH-1:0]   pcplus4_e;
+    wire               flush_e;
+    wire               rst_e;
 
-    flopr #(WIDTH)   rd1_e_flop(clk, rst, rd1_d, rd1_e);
-    flopr #(WIDTH)   rd2_e_flop(clk, rst, rd2_d, rd2_e);
-    flopr #(REGBITS) rs_e_flop(clk, rst, rs_d, rs_e);
-    flopr #(REGBITS) rt_e_flop(clk, rst, rt_d, rt_e);
-    flopr #(REGBITS) rd_e_flop(clk, rst, rd_d, rd_e);
-    flopr #(WIDTH)   signimm_e_flop(clk, rst, signimm_d, signimm_e);
+    assign rst_e = rst | flush_e;
 
-    flopr #(WIDTH)   pcplus4_e_flop(clk, rst, pcplus4_d, pcplus4_e);
+    flopr #(WIDTH)   rd1_e_flop(clk, rst_e, rd1_d, rd1_e);
+    flopr #(WIDTH)   rd2_e_flop(clk, rst_e, rd2_d, rd2_e);
+    flopr #(REGBITS) rs_e_flop(clk, rst_e, rs_d, rs_e);
+    flopr #(REGBITS) rt_e_flop(clk, rst_e, rt_d, rt_e);
+    flopr #(REGBITS) rd_e_flop(clk, rst_e, rd_d, rd_e);
+    flopr #(WIDTH)   signimm_e_flop(clk, rst_e, signimm_d, signimm_e);
+
+    flopr #(WIDTH)   pcplus4_e_flop(clk, rst_e, pcplus4_d, pcplus4_e);
 
     /* Controller output */
     assign op_rtype_d = (opcode_d == OP_RTYPE);
@@ -160,13 +166,13 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire       regdst_e;
     wire [2:0] alucontrol_e;
 
-    flopr #(1) regwrite_e_flop(clk, rst, regwrite_d, regwrite_e);
-    flopr #(1) memtoreg_e_flop(clk, rst, memtoreg_d, memtoreg_e);
-    flopr #(1) memwrite_e_flop(clk, rst, memwrite_d, memwrite_e);
-    flopr #(1) branch_e_flop(clk, rst, branch_d, branch_e);
-    flopr #(1) alusrc_e_flop(clk, rst, alusrc_d, alusrc_e);
-    flopr #(1) regdst_e_flop(clk, rst, regdst_d, regdst_e);
-    flopr #(3) alucontrol_e_flop(clk, rst, alucontrol_d, alucontrol_e);
+    flopr #(1) regwrite_e_flop(clk, rst_e, regwrite_d, regwrite_e);
+    flopr #(1) memtoreg_e_flop(clk, rst_e, memtoreg_d, memtoreg_e);
+    flopr #(1) memwrite_e_flop(clk, rst_e, memwrite_d, memwrite_e);
+    flopr #(1) branch_e_flop(clk, rst_e, branch_d, branch_e);
+    flopr #(1) alusrc_e_flop(clk, rst_e, alusrc_d, alusrc_e);
+    flopr #(1) regdst_e_flop(clk, rst_e, regdst_d, regdst_e);
+    flopr #(3) alucontrol_e_flop(clk, rst_e, alucontrol_d, alucontrol_e);
 
     /*
      * E stage: Execution stage
@@ -247,20 +253,28 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
      * Hazard unit
      */
     hazard_detect #(WIDTH, REGBITS) hazard_unit(
-        rs_e, rt_e,
+        rs_d, rt_d, rs_e, rt_e,
+        memtoreg_e,
         regwrite_m, regwrite_w,
         writereg_m, writereg_w,
+        stall_f, stall_d, flush_e,
         forwarda_sel_e, forwardb_sel_e);
 
 endmodule
 
 module hazard_detect #(parameter WIDTH = 32, REGBITS = 5)
-                      (input  [REGBITS-1:0] rs_e,
+                      (input  [REGBITS-1:0] rs_d,
+                       input  [REGBITS-1:0] rt_d,
+                       input  [REGBITS-1:0] rs_e,
                        input  [REGBITS-1:0] rt_e,
+                       input                memtoreg_e,
                        input                regwrite_m,
                        input                regwrite_w,
                        input  [REGBITS-1:0] writereg_m,
                        input  [REGBITS-1:0] writereg_w,
+                       output               stall_f,
+                       output               stall_d,
+                       output               flush_e,
                        output [1:0]         forwarda_sel_e,
                        output [1:0]         forwardb_sel_e);
     
@@ -272,6 +286,12 @@ module hazard_detect #(parameter WIDTH = 32, REGBITS = 5)
     assign forwardb_sel_e =
         ((rt_e != 0) && (rt_e == writereg_m) && regwrite_m) ? 2'b10 :
         ((rt_e != 0) && (rt_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
+
+    /* Load word hazard */
+    assign lw_stall = ((rs_d == rt_e) || (rt_d == rt_e)) && memtoreg_e;
+    assign stall_f  = lw_stall;
+    assign stall_d  = lw_stall;
+    assign flush_e  = lw_stall;
 
 endmodule
 
@@ -371,6 +391,22 @@ module flopr #(parameter WIDTH = 32)
         if (rst)
             q <= 0;
         else
+            q <= d;
+    end
+
+endmodule
+
+module flopenr #(parameter WIDTH = 32)
+                (input                  clk,
+                 input                  rst,
+                 input                  en,
+                 input      [WIDTH-1:0] d,
+                 output reg [WIDTH-1:0] q);
+
+    always @(posedge clk) begin
+        if (rst)
+            q <= 0;
+        else if (en)
             q <= d;
     end
 
