@@ -99,6 +99,7 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     /* Transfer to E stage */
     wire [WIDTH-1:0]   rd1_e;
     wire [WIDTH-1:0]   rd2_e;
+    wire [REGBITS-1:0] rs_e;
     wire [REGBITS-1:0] rt_e;
     wire [REGBITS-1:0] rd_e;
     wire [WIDTH-1:0]   signimm_e;
@@ -106,6 +107,7 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
 
     flopr #(WIDTH)   rd1_e_flop(clk, rst, rd1_d, rd1_e);
     flopr #(WIDTH)   rd2_e_flop(clk, rst, rd2_d, rd2_e);
+    flopr #(REGBITS) rs_e_flop(clk, rst, rs_d, rs_e);
     flopr #(REGBITS) rt_e_flop(clk, rst, rt_d, rt_e);
     flopr #(REGBITS) rd_e_flop(clk, rst, rd_d, rd_e);
     flopr #(WIDTH)   signimm_e_flop(clk, rst, signimm_d, signimm_e);
@@ -171,17 +173,25 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
      */
     wire [WIDTH-1:0]   srca_e;
     wire [WIDTH-1:0]   srcb_e;
+    wire [1:0]         forwarda_sel_e;
+    wire [1:0]         forwardb_sel_e;
+    wire [WIDTH-1:0]   forwarda_e;
+    wire [WIDTH-1:0]   forwardb_e;
     wire [REGBITS-1:0] writereg_e;
     wire [WIDTH-1:0]   pcbranch_e;
     wire [WIDTH-1:0]   aluout_e;
     wire               zero_e;
     wire [WIDTH-1:0]   writedata_e;
+    wire [WIDTH-1:0]   aluout_m;
+    
+    mux4 #(WIDTH) srca_e_mux(rd1_e, result_w, aluout_m, 0, forwarda_sel_e, forwarda_e);
+    mux4 #(WIDTH) srcb_e_mux0(rd2_e, result_w, aluout_m, 0, forwardb_sel_e, forwardb_e);
+    mux2 #(WIDTH) srcb_e_mux1(forwardb_e, signimm_e, alusrc_e, srcb_e);
 
-    assign srca_e      = rd1_e;
+    assign srca_e      = forwarda_e;
     assign pcbranch_e  = {signimm_e[WIDTH-3:0],2'b00} + pcplus4_e;
-    assign writedata_e = rd2_e;
+    assign writedata_e = forwardb_e;
 
-    mux2 #(WIDTH)   srcb_e_mux(rd2_e, signimm_e, alusrc_e, srcb_e);
     mux2 #(REGBITS) writereg_e_mux(rt_e, rd_e, regdst_e, writereg_e);
     alu  #(WIDTH)   alu0(srca_e, srcb_e, alucontrol_e, aluout_e, zero_e);
 
@@ -191,7 +201,6 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire               memwrite_m;
     wire               branch_m;
     wire               zero_m;
-    wire [WIDTH-1:0]   aluout_m;
     wire [WIDTH-1:0]   writedata_m;
     wire [REGBITS-1:0] writereg_m;
     
@@ -234,15 +243,45 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
      */
     mux2 #(WIDTH) result_w_mux(aluout_w, readdata_w, memtoreg_w, result_w);
 
+    /*
+     * Hazard unit
+     */
+    hazard_detect #(WIDTH, REGBITS) hazard_unit(
+        rs_e, rt_e,
+        regwrite_m, regwrite_w,
+        writereg_m, writereg_w,
+        forwarda_sel_e, forwardb_sel_e);
+
 endmodule
 
-module imem #(parameter WIDTH = 32, IMEMBITS = 16, IMEMDEPTH = 14)
-             (input  [IMEMBITS-1:0] addr,
-              output [WIDTH-1:0]    rd);
+module hazard_detect #(parameter WIDTH = 32, REGBITS = 5)
+                      (input  [REGBITS-1:0] rs_e,
+                       input  [REGBITS-1:0] rt_e,
+                       input                regwrite_m,
+                       input                regwrite_w,
+                       input  [REGBITS-1:0] writereg_m,
+                       input  [REGBITS-1:0] writereg_w,
+                       output [1:0]         forwarda_sel_e,
+                       output [1:0]         forwardb_sel_e);
+    
+    /* Forwarding */
+    assign forwarda_sel_e =
+        ((rs_e != 0) && (rs_e == writereg_m) && regwrite_m) ? 2'b10 :
+        ((rs_e != 0) && (rs_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
+    
+    assign forwardb_sel_e =
+        ((rt_e != 0) && (rt_e == writereg_m) && regwrite_m) ? 2'b10 :
+        ((rt_e != 0) && (rt_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
+
+endmodule
+
+module imem #(parameter WIDTH = 32, IMEMDEPTH = 14)
+             (input  [IMEMDEPTH-1:0] addr,
+              output [WIDTH-1:0]     rd);
 
     reg [WIDTH-1:0] mem[0:(1<<IMEMDEPTH)-1];
 
-    assign rd = mem[addr[IMEMBITS-1:(IMEMBITS-IMEMDEPTH)]];
+    assign rd = mem[addr];
 
     initial begin
         $readmemh("imem.dat", mem);
@@ -250,20 +289,20 @@ module imem #(parameter WIDTH = 32, IMEMBITS = 16, IMEMDEPTH = 14)
 
 endmodule
 
-module dmem #(parameter WIDTH = 32, DMEMBITS = 16, DMEMDEPTH = 14)
-             (input                 clk,
-              input                 memwrite,
-              input  [DMEMBITS-1:0] addr,
-              output [WIDTH-1:0]    rd,
-              input  [WIDTH-1:0]    wd);
+module dmem #(parameter WIDTH = 32, DMEMDEPTH = 14)
+             (input                  clk,
+              input                  memwrite,
+              input  [DMEMDEPTH-1:0] addr,
+              output [WIDTH-1:0]     rd,
+              input  [WIDTH-1:0]     wd);
 
     reg [WIDTH-1:0] mem[0:(1<<DMEMDEPTH)-1];
 
-    assign rd = mem[addr[DMEMBITS-1:(DMEMBITS-DMEMDEPTH)]];
+    assign rd = mem[addr];
 
     always @(posedge clk) begin
         if (memwrite)
-            mem[addr[DMEMBITS-1:(DMEMBITS-DMEMDEPTH)]] <= wd;
+            mem[addr] <= wd;
     end
     
     initial begin

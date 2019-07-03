@@ -22,8 +22,8 @@ module top #(parameter WIDTH = 32, REGBITS = 5)();
     mips dut(clk, rst, pc, instr,
              aluout, writedata, memwrite, readdata);
 
-    imem ex_imem(pc[15:0], instr);
-    dmem ex_dmem(clk, memwrite, aluout[15:0], readdata, writedata);
+    imem ex_imem(pc[15:2], instr);
+    dmem ex_dmem(clk, memwrite, aluout[15:2], readdata, writedata);
 
     initial begin
         clk <= `DISABLE; rst <= `ENABLE; #STEP; rst <= `DISABLE;
