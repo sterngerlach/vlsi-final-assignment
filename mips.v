@@ -49,8 +49,8 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     /*
      * F stage: Instruction fetch stage
      */
-    wire [WIDTH-1:0] pcbranch_m;
-    wire             pcsrc_m;
+    wire [WIDTH-1:0] pcbranch_d;
+    wire             pcsrc_d;
 
     wire [WIDTH-1:0] pcplus4_f;
     wire [WIDTH-1:0] pcnext;
@@ -59,15 +59,18 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
 
     wire [WIDTH-1:0] instr_d;
     wire [WIDTH-1:0] pcplus4_d;
+    wire             rst_d;
     
     assign pcplus4_f = pc + 4;
 
-    mux2    #(WIDTH) pc_mux(pcplus4_f, pcbranch_m, pcsrc_m, pcnext);
+    mux2    #(WIDTH) pc_mux(pcplus4_f, pcbranch_d, pcsrc_d, pcnext);
     flopenr #(WIDTH) pc_flop(clk, rst, !stall_f, pcnext, pc);
 
     /* Transfer to D stage */
-    flopenr #(WIDTH) instr_d_flop(clk, rst, !stall_d, instr, instr_d);
-    flopenr #(WIDTH) pcplus4_d_flop(clk, rst, !stall_d, pcplus4_f, pcplus4_d);
+    assign rst_d = rst | pcsrc_d;
+
+    flopenr #(WIDTH) instr_d_flop(clk, rst_d, !stall_d, instr, instr_d);
+    flopenr #(WIDTH) pcplus4_d_flop(clk, rst_d, !stall_d, pcplus4_f, pcplus4_d);
 
     /*
      * D stage: Instruction Decode stage
@@ -83,8 +86,9 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     
     /* Decompose instruction */
     assign { opcode_d, rs_d, rt_d, rd_d, shamt_d, funct_d } = instr_d;
-    assign imm_d = instr_d[IMMW-1:0];
-    assign signimm_d = {{(WIDTH-IMMW){imm_d[IMMW-1]}}, imm_d};
+    assign imm_d      = instr_d[IMMW-1:0];
+    assign signimm_d  = {{(WIDTH-IMMW){imm_d[IMMW-1]}}, imm_d};
+    assign pcbranch_d = {signimm_d[WIDTH-3:0],2'b00} + pcplus4_d;
     
     /* Register file output */
     wire               regwrite_w;
@@ -97,7 +101,8 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     regfile #(WIDTH, REGBITS) rfile(clk, regwrite_w, rs_d, rt_d,
                                     writereg_w, result_w,
                                     rd1_d, rd2_d);
-    
+
+        
     /* Transfer to E stage */
     wire [WIDTH-1:0]   rd1_e;
     wire [WIDTH-1:0]   rd2_e;
@@ -105,7 +110,6 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire [REGBITS-1:0] rt_e;
     wire [REGBITS-1:0] rd_e;
     wire [WIDTH-1:0]   signimm_e;
-    wire [WIDTH-1:0]   pcplus4_e;
     wire               flush_e;
     wire               rst_e;
 
@@ -117,8 +121,6 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     flopr #(REGBITS) rt_e_flop(clk, rst_e, rt_d, rt_e);
     flopr #(REGBITS) rd_e_flop(clk, rst_e, rd_d, rd_e);
     flopr #(WIDTH)   signimm_e_flop(clk, rst_e, signimm_d, signimm_e);
-
-    flopr #(WIDTH)   pcplus4_e_flop(clk, rst_e, pcplus4_d, pcplus4_e);
 
     /* Controller output */
     assign op_rtype_d = (opcode_d == OP_RTYPE);
@@ -157,6 +159,18 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
                           (aluop_d == 2'b10 && funct_or_d)  ? `ALU_OR  :
                           (aluop_d == 2'b10 && funct_slt_d) ? `ALU_SLT : `ALU_NOP;
     
+    wire [WIDTH-1:0] forwarda_d;
+    wire [WIDTH-1:0] forwardb_d;
+    wire             forwarda_sel_d;
+    wire             forwardb_sel_d;
+    wire [WIDTH-1:0] aluout_m;
+
+    mux2 #(WIDTH) forwarda_d_mux(rd1_d, aluout_m, forwarda_sel_d, forwarda_d);
+    mux2 #(WIDTH) forwardb_d_mux(rd2_d, aluout_m, forwardb_sel_d, forwardb_d);
+
+    assign equal_d      = forwarda_d == forwardb_d;
+    assign pcsrc_d      = equal_d & branch_d;
+
     /* Transfer to E stage */
     wire       regwrite_e;
     wire       memtoreg_e;
@@ -184,18 +198,15 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire [WIDTH-1:0]   forwarda_e;
     wire [WIDTH-1:0]   forwardb_e;
     wire [REGBITS-1:0] writereg_e;
-    wire [WIDTH-1:0]   pcbranch_e;
     wire [WIDTH-1:0]   aluout_e;
     wire               zero_e;
     wire [WIDTH-1:0]   writedata_e;
-    wire [WIDTH-1:0]   aluout_m;
     
-    mux4 #(WIDTH) srca_e_mux(rd1_e, result_w, aluout_m, 0, forwarda_sel_e, forwarda_e);
-    mux4 #(WIDTH) srcb_e_mux0(rd2_e, result_w, aluout_m, 0, forwardb_sel_e, forwardb_e);
-    mux2 #(WIDTH) srcb_e_mux1(forwardb_e, signimm_e, alusrc_e, srcb_e);
+    mux4 #(WIDTH) forwarda_e_mux(rd1_e, result_w, aluout_m, 0, forwarda_sel_e, forwarda_e);
+    mux4 #(WIDTH) forwardb_e_mux(rd2_e, result_w, aluout_m, 0, forwardb_sel_e, forwardb_e);
+    mux2 #(WIDTH) srcb_e_mux(forwardb_e, signimm_e, alusrc_e, srcb_e);
 
     assign srca_e      = forwarda_e;
-    assign pcbranch_e  = {signimm_e[WIDTH-3:0],2'b00} + pcplus4_e;
     assign writedata_e = forwardb_e;
 
     mux2 #(REGBITS) writereg_e_mux(rt_e, rd_e, regdst_e, writereg_e);
@@ -218,12 +229,10 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     flopr #(WIDTH)   aluout_m_flop(clk, rst, aluout_e, aluout_m);
     flopr #(WIDTH)   writedata_m_flop(clk, rst, writedata_e, writedata_m);
     flopr #(REGBITS) writereg_m_flop(clk, rst, writereg_e, writereg_m);
-    flopr #(WIDTH)   pcbranch_m_flop(clk, rst, pcbranch_e, pcbranch_m);
 
     /*
      * M stage: Memory stage
      */
-    assign pcsrc_m = branch_m & zero_m;
 
     /* Data memory */
     wire [WIDTH-1:0] readdata_m;
@@ -254,10 +263,12 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
      */
     hazard_detect #(WIDTH, REGBITS) hazard_unit(
         rs_d, rt_d, rs_e, rt_e,
-        memtoreg_e,
-        regwrite_m, regwrite_w,
-        writereg_m, writereg_w,
+        branch_d,
+        memtoreg_e, memtoreg_m,
+        regwrite_e, regwrite_m, regwrite_w,
+        writereg_e, writereg_m, writereg_w,
         stall_f, stall_d, flush_e,
+        forwarda_sel_d, forwardb_sel_d,
         forwarda_sel_e, forwardb_sel_e);
 
 endmodule
@@ -267,31 +278,48 @@ module hazard_detect #(parameter WIDTH = 32, REGBITS = 5)
                        input  [REGBITS-1:0] rt_d,
                        input  [REGBITS-1:0] rs_e,
                        input  [REGBITS-1:0] rt_e,
+                       input                branch_d,
                        input                memtoreg_e,
+                       input                memtoreg_m,
+                       input                regwrite_e,
                        input                regwrite_m,
                        input                regwrite_w,
+                       input  [REGBITS-1:0] writereg_e,
                        input  [REGBITS-1:0] writereg_m,
                        input  [REGBITS-1:0] writereg_w,
                        output               stall_f,
                        output               stall_d,
                        output               flush_e,
+                       output               forwarda_sel_d,
+                       output               forwardb_sel_d,
                        output [1:0]         forwarda_sel_e,
                        output [1:0]         forwardb_sel_e);
     
     /* Forwarding */
+    assign forwarda_sel_d =
+        (rs_d != 0) && (rs_d == writereg_m) && regwrite_m;
+    assign forwardb_sel_d =
+        (rt_d != 0) && (rt_d == writereg_m) && regwrite_m;
+
     assign forwarda_sel_e =
         ((rs_e != 0) && (rs_e == writereg_m) && regwrite_m) ? 2'b10 :
         ((rs_e != 0) && (rs_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
-    
     assign forwardb_sel_e =
         ((rt_e != 0) && (rt_e == writereg_m) && regwrite_m) ? 2'b10 :
         ((rt_e != 0) && (rt_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
-
+    
     /* Load word hazard */
     assign lw_stall = ((rs_d == rt_e) || (rt_d == rt_e)) && memtoreg_e;
-    assign stall_f  = lw_stall;
-    assign stall_d  = lw_stall;
-    assign flush_e  = lw_stall;
+    
+    /* Branch hazard */
+    assign branch_stall =
+        (branch_d && regwrite_e && (writereg_e == rs_d || writereg_e == rt_d)) ||
+        (branch_d && memtoreg_m && (writereg_m == rs_d || writereg_m == rt_d));
+    
+    assign stall    = lw_stall | branch_stall;
+    assign stall_f  = stall;
+    assign stall_d  = stall;
+    assign flush_e  = stall;
 
 endmodule
 
