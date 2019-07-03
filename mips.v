@@ -22,6 +22,7 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     localparam SHAMTW    = 5;
     localparam FUNCTW    = 6;
     localparam IMMW      = 16;
+    localparam JADDRW    = 26;
 
     localparam OP_RTYPE  = 6'b000000;
     localparam OP_LB     = 6'b100000;
@@ -50,7 +51,10 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
      * F stage: Instruction fetch stage
      */
     wire [WIDTH-1:0] pcbranch_d;
+    wire [WIDTH-1:0] pcbranch_f;
     wire             pcsrc_d;
+    wire [WIDTH-1:0] pcjump_d;
+    wire             jump_d;
 
     wire [WIDTH-1:0] pcplus4_f;
     wire [WIDTH-1:0] pcnext;
@@ -63,11 +67,12 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     
     assign pcplus4_f = pc + 4;
 
-    mux2    #(WIDTH) pc_mux(pcplus4_f, pcbranch_d, pcsrc_d, pcnext);
+    mux2    #(WIDTH) pcbranch_mux(pcplus4_f, pcbranch_d, pcsrc_d, pcbranch_f);
+    mux2    #(WIDTH) pcnext_mux(pcbranch_f, pcjump_d, jump_d, pcnext);
     flopenr #(WIDTH) pc_flop(clk, rst, !stall_f, pcnext, pc);
 
     /* Transfer to D stage */
-    assign rst_d = rst | pcsrc_d;
+    assign rst_d = rst | pcsrc_d | jump_d;
 
     flopenr #(WIDTH) instr_d_flop(clk, rst_d, !stall_d, instr, instr_d);
     flopenr #(WIDTH) pcplus4_d_flop(clk, rst_d, !stall_d, pcplus4_f, pcplus4_d);
@@ -90,6 +95,11 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     assign signimm_d  = {{(WIDTH-IMMW){imm_d[IMMW-1]}}, imm_d};
     assign pcbranch_d = {signimm_d[WIDTH-3:0],2'b00} + pcplus4_d;
     
+    wire [JADDRW-1:0]  addr_d;
+    
+    assign addr_d     = instr_d[JADDRW-1:0];
+    assign pcjump_d   = {pcplus4_d[WIDTH-1:WIDTH-4],addr_d,2'b00};
+
     /* Register file output */
     wire               regwrite_w;
     wire [REGBITS-1:0] writereg_w;
@@ -112,11 +122,16 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire [WIDTH-1:0]   signimm_e;
     wire               flush_e;
     wire               rst_e;
+    
+    wire [WIDTH-1:0] forwarda_d;
+    wire [WIDTH-1:0] forwardb_d;
+    wire             forwarda_sel_d;
+    wire             forwardb_sel_d;
 
     assign rst_e = rst | flush_e;
 
-    flopr #(WIDTH)   rd1_e_flop(clk, rst_e, rd1_d, rd1_e);
-    flopr #(WIDTH)   rd2_e_flop(clk, rst_e, rd2_d, rd2_e);
+    flopr #(WIDTH)   rd1_e_flop(clk, rst_e, forwarda_d, rd1_e);
+    flopr #(WIDTH)   rd2_e_flop(clk, rst_e, forwardb_d, rd2_e);
     flopr #(REGBITS) rs_e_flop(clk, rst_e, rs_d, rs_e);
     flopr #(REGBITS) rt_e_flop(clk, rst_e, rt_d, rt_e);
     flopr #(REGBITS) rd_e_flop(clk, rst_e, rd_d, rd_e);
@@ -147,6 +162,7 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     assign branch_d     = op_beq_d;
     assign alusrc_d     = op_lw_d | op_sw_d | op_lb_d | op_sb_d | op_addi_d;
     assign regdst_d     = op_rtype_d;
+    assign jump_d       = op_j_d;
 
     assign aluop_d      = (op_lw_d | op_sw_d | op_lb_d | op_sb_d | op_addi_d) ? 2'b00 :
                           (op_beq_d) ? 2'b01 :
@@ -159,10 +175,6 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
                           (aluop_d == 2'b10 && funct_or_d)  ? `ALU_OR  :
                           (aluop_d == 2'b10 && funct_slt_d) ? `ALU_SLT : `ALU_NOP;
     
-    wire [WIDTH-1:0] forwarda_d;
-    wire [WIDTH-1:0] forwardb_d;
-    wire             forwarda_sel_d;
-    wire             forwardb_sel_d;
     wire [WIDTH-1:0] aluout_m;
 
     mux2 #(WIDTH) forwarda_d_mux(rd1_d, aluout_m, forwarda_sel_d, forwarda_d);
@@ -297,24 +309,34 @@ module hazard_detect #(parameter WIDTH = 32, REGBITS = 5)
     
     /* Forwarding */
     assign forwarda_sel_d =
-        (rs_d != 0) && (rs_d == writereg_m) && regwrite_m;
+        (rs_d != 0) & (rs_d == writereg_m) & regwrite_m;
     assign forwardb_sel_d =
-        (rt_d != 0) && (rt_d == writereg_m) && regwrite_m;
+        (rt_d != 0) & (rt_d == writereg_m) & regwrite_m;
 
     assign forwarda_sel_e =
-        ((rs_e != 0) && (rs_e == writereg_m) && regwrite_m) ? 2'b10 :
-        ((rs_e != 0) && (rs_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
+        ((rs_e != 0) & (rs_e == writereg_m) & regwrite_m) ? 2'b10 :
+        ((rs_e != 0) & (rs_e == writereg_w) & regwrite_w) ? 2'b01 : 2'b00;
     assign forwardb_sel_e =
-        ((rt_e != 0) && (rt_e == writereg_m) && regwrite_m) ? 2'b10 :
-        ((rt_e != 0) && (rt_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
+        ((rt_e != 0) & (rt_e == writereg_m) & regwrite_m) ? 2'b10 :
+        ((rt_e != 0) & (rt_e == writereg_w) & regwrite_w) ? 2'b01 : 2'b00;
     
     /* Load word hazard */
-    assign lw_stall = ((rs_d == rt_e) || (rt_d == rt_e)) && memtoreg_e;
+    assign lw_stall = ((rs_d == rt_e) | (rt_d == rt_e)) & memtoreg_e;
     
     /* Branch hazard */
     assign branch_stall =
-        (branch_d && regwrite_e && (writereg_e == rs_d || writereg_e == rt_d)) ||
-        (branch_d && memtoreg_m && (writereg_m == rs_d || writereg_m == rt_d));
+        (branch_d & regwrite_e &
+            ((writereg_e == rs_d & rs_d != 0) |
+             (writereg_e == rt_d & rt_d != 0))) |
+        (branch_d & memtoreg_m &
+            ((writereg_m == rs_d & rs_d != 0) |
+             (writereg_m == rt_d & rt_d != 0)));
+
+    /* assign branch_stall = 
+        (branch_d & regwrite_e &
+            ((writereg_e == rs_d) | (writereg_e == rt_d))) |
+        (branch_d & memtoreg_m &
+            ((writereg_m == rs_d) | (writereg_m == rt_d))); */
     
     assign stall    = lw_stall | branch_stall;
     assign stall_f  = stall;
