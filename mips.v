@@ -59,6 +59,9 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire [WIDTH-1:0] pcplus4_d;
     wire             rst_d;
     
+    wire             nop_f;
+    wire             nop_d;
+
     assign pcplus4_f = pc + 4;
 
     mux2    #(WIDTH) pcbranch_mux(pcplus4_f, pcbranch_d, pcsrc_d, pcbranch_f);
@@ -68,8 +71,22 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     /* Transfer to D stage */
     assign rst_d = rst | pcsrc_d | jump_d;
 
+    /*
+     * This flag is needed since op_rtype_d, regwrite_d, and eventually branch_stall
+     * are enabled if instr_d is 32'b0, which causes unintended branch stalls
+     */
+
+    /*
+     * If j instruction is in E stage and beq instruction is in D stage,
+     * i.e. (j loop) and (beq $3, $0, end) are executed consecutively,
+     * branch_stall is wrongly set to enable, since regwrite_e and branch_d
+     * are enable, and both writereg_e and rs_d (or writereg_e and rt_d) are 0
+     */
+    assign nop_f = pcsrc_d | jump_d;
+
     flopenr #(WIDTH) instr_d_flop(clk, rst_d, !stall_d, instr, instr_d);
     flopenr #(WIDTH) pcplus4_d_flop(clk, rst_d, !stall_d, pcplus4_f, pcplus4_d);
+    flopenr #(WIDTH) nop_d_flop(clk, rst, !stall_d, nop_f, nop_d);
 
     /*
      * D stage: Instruction Decode stage
@@ -148,13 +165,13 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire [1:0] aluop_d;
     wire [2:0] alucontrol_d;
 
-    assign regwrite_d   = op_rtype_d | op_lw_d | op_lb_d | op_addi_d;
-    assign memtoreg_d   = op_lw_d | op_lb_d;
-    assign memwrite_d   = op_sw_d | op_sb_d;
-    assign branch_d     = op_beq_d;
-    assign alusrc_d     = op_lw_d | op_sw_d | op_lb_d | op_sb_d | op_addi_d;
-    assign regdst_d     = op_rtype_d;
-    assign jump_d       = op_j_d;
+    assign regwrite_d   = !nop_d & (op_rtype_d | op_lw_d | op_lb_d | op_addi_d);
+    assign memtoreg_d   = !nop_d & (op_lw_d | op_lb_d);
+    assign memwrite_d   = !nop_d & (op_sw_d | op_sb_d);
+    assign branch_d     = !nop_d & op_beq_d;
+    assign alusrc_d     = !nop_d & (op_lw_d | op_sw_d | op_lb_d | op_sb_d | op_addi_d);
+    assign regdst_d     = !nop_d & op_rtype_d;
+    assign jump_d       = !nop_d & op_j_d;
 
     assign aluop_d      = (op_lw_d | op_sw_d | op_lb_d | op_sb_d | op_addi_d) ? 2'b00 :
                           (op_beq_d) ? 2'b01 :
@@ -333,21 +350,21 @@ module hazard_detect #(parameter WIDTH = 32, REGBITS = 5)
     assign lw_stall = ((rs_d == rt_e) || (rt_d == rt_e)) && memtoreg_e;
     
     /* Branch hazard */
-    assign branch_stall =
+    /* assign branch_stall =
         (branch_d && regwrite_e &&
             ((writereg_e == rs_d && rs_d != 0) ||
              (writereg_e == rt_d && rt_d != 0))) ||
         (branch_d && memtoreg_m &&
             ((writereg_m == rs_d && rs_d != 0) ||
-             (writereg_m == rt_d && rt_d != 0)));
+             (writereg_m == rt_d && rt_d != 0))); */
 
-    /* assign branch_stall = 
+    assign branch_stall = 
         (branch_d && regwrite_e &&
             ((writereg_e == rs_d) || (writereg_e == rt_d))) ||
         (branch_d && memtoreg_m &&
-            ((writereg_m == rs_d) || (writereg_m == rt_d))); */
+            ((writereg_m == rs_d) || (writereg_m == rt_d)));
     
-    assign stall    = lw_stall || branch_stall;
+    assign stall    = lw_stall | branch_stall;
     assign stall_f  = stall;
     assign stall_d  = stall;
     assign flush_e  = stall;

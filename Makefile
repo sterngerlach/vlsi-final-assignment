@@ -19,3 +19,6 @@ hazard1: hazard1.asm
 hazard2: hazard2.asm
 	./asm.pl -o imem.dat hazard2.asm
 
+fib: fib.asm
+	./asm.pl -o imem.dat fib.asm
+
