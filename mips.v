@@ -86,7 +86,7 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
 
     flopenr #(WIDTH) instr_d_flop(clk, rst_d, !stall_d, instr, instr_d);
     flopenr #(WIDTH) pcplus4_d_flop(clk, rst_d, !stall_d, pcplus4_f, pcplus4_d);
-    flopenr #(WIDTH) nop_d_flop(clk, rst, !stall_d, nop_f, nop_d);
+    flopenr #(1)     nop_d_flop(clk, rst, !stall_d, nop_f, nop_d);
 
     /*
      * D stage: Instruction Decode stage
@@ -119,7 +119,7 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire [WIDTH-1:0]   rd1_d;
     wire [WIDTH-1:0]   rd2_d;
     
-    regfile #(WIDTH, REGBITS) rfile(clk, regwrite_w, rs_d, rt_d,
+    regfile #(WIDTH, REGBITS) rfile(clk, rst, regwrite_w, rs_d, rt_d,
                                     writereg_w, result_w,
                                     rd1_d, rd2_d);
 
@@ -153,6 +153,15 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     flopr #(WIDTH)   signimm_e_flop(clk, rst_e, signimm_d, signimm_e);
 
     /* Controller output */
+    wire op_rtype_d;
+    wire op_lb_d;
+    wire op_sb_d;
+    wire op_lw_d;
+    wire op_sw_d;
+    wire op_beq_d;
+    wire op_addi_d;
+    wire op_j_d;
+
     assign op_rtype_d = (opcode_d == OP_RTYPE);
     assign op_lb_d    = (opcode_d == OP_LB);
     assign op_sb_d    = (opcode_d == OP_SB);
@@ -161,10 +170,17 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     assign op_beq_d   = (opcode_d == OP_BEQ);
     assign op_addi_d  = (opcode_d == OP_ADDI);
     assign op_j_d     = (opcode_d == OP_J);
+    
+    wire regwrite_d;
+    wire memtoreg_d;
+    wire memwrite_d;
+    wire branch_d;
+    wire alusrc_d;
+    wire regdst_d;
 
     wire [1:0] aluop_d;
     wire [2:0] alucontrol_d;
-
+    
     assign regwrite_d   = !nop_d & (op_rtype_d | op_lw_d | op_lb_d | op_addi_d);
     assign memtoreg_d   = !nop_d & (op_lw_d | op_lb_d);
     assign memwrite_d   = !nop_d & (op_sw_d | op_sb_d);
@@ -227,16 +243,16 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     wire               regwrite_m;
     wire               memtoreg_m;
     wire               memwrite_m;
-    wire               branch_m;
-    wire               zero_m;
+    /* wire               branch_m; */
+    /* wire               zero_m; */
     wire [WIDTH-1:0]   writedata_m;
     wire [REGBITS-1:0] writereg_m;
     
     flopr #(1)       regwrite_m_flop(clk, rst, regwrite_e, regwrite_m);
     flopr #(1)       memtoreg_m_flop(clk, rst, memtoreg_e, memtoreg_m);
     flopr #(1)       memwrite_m_flop(clk, rst, memwrite_e, memwrite_m);
-    flopr #(1)       branch_m_flop(clk, rst, branch_e, branch_m);
-    flopr #(1)       zero_m_flop(clk, rst, zero_e, zero_m);
+    /* flopr #(1)       branch_m_flop(clk, rst, branch_e, branch_m); */
+    /* flopr #(1)       zero_m_flop(clk, rst, zero_e, zero_m); */
     flopr #(WIDTH)   aluout_m_flop(clk, rst, aluout_e, aluout_m);
     flopr #(WIDTH)   writedata_m_flop(clk, rst, writedata_e, writedata_m);
     flopr #(REGBITS) writereg_m_flop(clk, rst, writereg_e, writereg_m);
@@ -295,6 +311,12 @@ module alucontrol #(parameter FUNCTW = 6)
     localparam FUNCT_OR  = 6'b100101;
     localparam FUNCT_SLT = 6'b101010;
 
+    wire funct_add;
+    wire funct_sub;
+    wire funct_and;
+    wire funct_or;
+    wire funct_slt;
+
     assign funct_add = (funct == FUNCT_ADD);
     assign funct_sub = (funct == FUNCT_SUB);
     assign funct_and = (funct == FUNCT_AND);
@@ -347,6 +369,10 @@ module hazard_detect #(parameter WIDTH = 32, REGBITS = 5)
         ((rt_e != 0) && (rt_e == writereg_w) && regwrite_w) ? 2'b01 : 2'b00;
     
     /* Load word hazard */
+    wire lw_stall;
+    wire branch_stall;
+    wire stall;
+
     assign lw_stall = ((rs_d == rt_e) || (rt_d == rt_e)) && memtoreg_e;
     
     /* Branch hazard */
@@ -426,6 +452,7 @@ endmodule
 
 module regfile #(parameter WIDTH = 32, REGBITS = 5)
                 (input                clk,
+                 input                rst,
                  input                regwrite,
                  input  [REGBITS-1:0] ra1,
                  input  [REGBITS-1:0] ra2,
@@ -434,14 +461,20 @@ module regfile #(parameter WIDTH = 32, REGBITS = 5)
                  output [WIDTH-1:0]   rd1,
                  output [WIDTH-1:0]   rd2);
     
+    integer i;
     reg [WIDTH-1:0] rf[0:(1<<REGBITS)-1];
 
     assign rd1 = (|ra1 == 0) ? 0 : rf[ra1];
     assign rd2 = (|ra2 == 0) ? 0 : rf[ra2];
 
     always @(negedge clk) begin
-        if (regwrite)
+        if (rst) begin
+            for (i = 0; i < (1 << REGBITS) - 1; i = i + 1) begin
+                rf[i] <= 32'b0;
+            end
+        end else if (regwrite) begin
             rf[wa] <= wd;
+        end
     end
 
 endmodule
