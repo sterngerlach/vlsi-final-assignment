@@ -2,16 +2,42 @@
 # .gitignore
 
 *.dsn
+*.enc
+*.enc.dat
+*.err
 *.history
-*.log
+*.old
+*.rpt
+*.rs.fp
+*.rs.fp.spr
+*.saif
+*.sdc
+*.sdf
+*.sdf.X
+*.spef
+*.svf
 *.swp
 *.trn
 *.vcd
+*.view
+*.vnet
 
+command.log
+innovus.cmd*
+innovus.log*
+ncverilog.log
+scheduling_file.cts.*
+sdf.log
+
+.bpad/
+.cadence/
 .simvision/
+INCA_libs/
+WORK/
 xcelium.d/
 
 asm.pl
+asm32.pl
 mipse/
 tinymips/
 
