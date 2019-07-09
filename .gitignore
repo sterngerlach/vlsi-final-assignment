@@ -33,6 +33,7 @@ sdf.log
 .cadence/
 .simvision/
 INCA_libs/
+timingReports/
 WORK/
 xcelium.d/
 
