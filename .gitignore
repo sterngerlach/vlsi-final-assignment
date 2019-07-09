@@ -39,5 +39,6 @@ xcelium.d/
 asm.pl
 asm32.pl
 mipse/
+scripts/
 tinymips/
 
