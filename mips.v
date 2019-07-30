@@ -196,7 +196,7 @@ module mips #(parameter WIDTH = 32, REGBITS = 5)
     alucontrol alucont(aluop_d, funct_d, alucontrol_d);
 
     assign equal_d      = forwarda_d == forwardb_d;
-    assign pcsrc_d      = equal_d & branch_d;
+    assign pcsrc_d      = equal_d & branch_d & (!stall_d);
 
     /* Transfer to E stage */
     wire       regwrite_e;
