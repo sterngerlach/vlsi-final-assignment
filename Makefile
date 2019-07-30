@@ -21,10 +21,16 @@ hazard2: hazard2.asm
 	./asm32.pl -o imem.dat hazard2.asm
 
 fib: fib.asm
-	./asm32.pl -o imem.dat fib.asm
+	./asm32.pl -o fib.dat fib.asm
 
 sum: sum.asm
-	./asm32.pl -o imem.dat sum.asm
+	./asm32.pl -o sum.dat sum.asm
+
+find: find.asm
+	./asm32.pl -o find.dat find.asm
+
+sort: sort.asm
+	./asm32.pl -o sort.dat sort.asm
 
 # Step 2: Synthesis
 syn:
