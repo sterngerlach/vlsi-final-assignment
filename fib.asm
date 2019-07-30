@@ -6,11 +6,13 @@ main:
     addi $4, $0, 1
     addi $5, $0, -1
 loop:
-    beq $3, $0, end
-    add $4, $4, $5
-    sub $5, $4, $5
+    beq  $3, $0, end
+    add  $4, $4, $5
+    sub  $5, $4, $5
     addi $3, $3, -1
     j loop
 end:
-    sw $4, 4($0)
+    sw   $4, 4($0)
+    addi $7, $0, 127
+    sw   $7, 192($0)
 
